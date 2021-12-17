@@ -1,0 +1,122 @@
+#
+# Copyright 2017 Confluent Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+ARG UBI_MINIMAL_VERSION="latest"
+FROM registry.access.redhat.com/ubi8/ubi-minimal:${UBI_MINIMAL_VERSION}
+
+ARG PROJECT_VERSION
+ARG ARTIFACT_ID
+
+# Remember where we came from
+LABEL io.confluent.docker.git.repo="confluentinc/common-docker"
+
+ARG GIT_COMMIT
+LABEL io.confluent.docker.git.id=$GIT_COMMIT
+
+ARG BUILD_NUMBER=-1
+LABEL io.confluent.docker.build.number=$BUILD_NUMBER
+
+LABEL maintainer="tools@confluent.io"
+LABEL vendor="Confluent"
+LABEL version=$GIT_COMMIT
+LABEL release=$PROJECT_VERSION
+LABEL name=$ARTIFACT_ID
+LABEL summary="Common base image for Confluent's Docker images."
+LABEL io.confluent.docker=true
+
+# This affects how strings in Java class files are interpreted.  We want UTF-8 and this is the only locale in the
+# base image that supports it
+ENV LANG="C.UTF-8"
+
+# Set the classpath for JARs required by `cub`
+ENV CUB_CLASSPATH='"/usr/share/java/cp-base-new/*"'
+
+# These ARGs are left blank indicating to the Dnf package manager to install the latest package
+# version that happens to be availible at this time. For reproducible builds, versions should be specified
+# as '-1.2.3-4.el8' on the command line. Or more preferibly the 'dockerfile-maven-plugin' is used
+# where these arguments are set in base/pom.xml under the <buildArgs> elements based on the commit you're
+# building from.
+
+# Redhat Package Versions
+ARG OPENSSL_VERSION=""
+ARG WGET_VERSION=""
+ARG NETCAT_VERSION=""
+ARG TAR_VERSION=""
+ARG PROCPS_VERSION=""
+ARG KRB5_WORKSTATION_VERSION=""
+ARG IPUTILS_VERSION=""
+ARG HOSTNAME_VERSION=""
+
+# Zulu OpenJDK version
+ARG ADOPT_OPENJDK_VERSION=""
+
+RUN microdnf install yum \
+    && yum install -y --setopt=install_weak_deps=False \
+        git \
+        "openssl${OPENSSL_VERSION}" \
+        "wget${WGET_VERSION}" \
+        "nmap-ncat${NETCAT_VERSION}" \
+        "tar${TAR_VERSION}" \
+        "procps-ng${PROCPS_VERSION}" \
+        "krb5-workstation${KRB5_WORKSTATION_VERSION}" \
+        "iputils${IPUTILS_VERSION}" \
+        "hostname${HOSTNAME_VERSION}" \
+    && yum remove -y git \
+    && yum clean all \
+    && rm -rf /tmp/* \
+    && mkdir -p /etc/confluent/docker /usr/logs \
+    && useradd --no-log-init --create-home --shell /bin/bash appuser \
+    && chown appuser:appuser -R /etc/confluent/ /usr/logs
+
+# This is a step that will cause the build to fail of the package manager detects a package update is availible and isn't installed.
+# The ARG SKIP_SECURITY_UPDATE_CHECK is an "escape" hatch if you want to by-pass this check and build the container anyways, which
+# is not advisable in terms of security posture. If set to false (which triggers a shell exit(1) if the check fails from the left
+# hand of ||) this check will fail. If true (which triggers a right-hand || shell exit(0)), then this check will pass even if a
+# security update is availible. We skip checks from ZuluJDK repos because Confluent pins those upstream versions for various reasons 
+# such as identified bugs in ZuluJDK's software.
+
+LABEL name="AdoptOpenJDK Java" \
+      vendor="AdoptOpenJDK" \
+      version="jdk11u" \
+      release="11" \
+      run="docker run --rm -ti <image_name:tag> /bin/bash" \
+      summary="AdoptOpenJDK Docker Image for OpenJDK with hotspot and ubi-minimal" \
+      description="For more information on this image please see https://github.com/AdoptOpenJDK/openjdk-docker/blob/master/README.md"
+
+ENV JAVA_VERSION=jdk11u
+
+RUN set -eux; \
+    ESUM='8d429c00a4f877aef698d22b29fe3684fd37c620919c376b231be857d505c6a8'; \
+    BINARY_URL='https://github.com/AdoptOpenJDK/openjdk11-binaries/releases/download/jdk11u-2021-05-07-07-34/OpenJDK11U-jdk_s390x_linux_hotspot_2021-05-07-07-34.tar.gz'; \
+    curl -LfsSo /tmp/openjdk.tar.gz ${BINARY_URL}; \
+    echo "${ESUM} */tmp/openjdk.tar.gz" | sha256sum -c -; \
+    mkdir -p /opt/java/openjdk; \
+    cd /opt/java/openjdk; \
+    tar -xf /tmp/openjdk.tar.gz --strip-components=1; \
+    export PATH="/opt/java/openjdk/bin:$PATH"; \
+    microdnf clean all; \
+    rm -rf /tmp/openjdk.tar.gz;
+
+ENV JAVA_HOME=/opt/java/openjdk \
+    PATH="/opt/java/openjdk/bin:$PATH"
+
+###########
+#############
+COPY --chown=appuser:appuser include/etc/confluent/docker /etc/confluent/docker
+
+RUN mkdir /licenses
+COPY license.txt /licenses
+
+USER appuser
+WORKDIR /home/appuser
