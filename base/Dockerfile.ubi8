@@ -120,3 +120,4 @@ COPY license.txt /licenses
 
 USER appuser
 WORKDIR /home/appuser
+
